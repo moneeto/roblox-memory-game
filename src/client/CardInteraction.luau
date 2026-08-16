@@ -1,5 +1,6 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local CardData = require(Shared.CardData)
@@ -10,6 +11,8 @@ local SoundManager = require(script.Parent.SoundManager)
 local TableHud = require(script.Parent.TableHud)
 local TableCamera = require(script.Parent.TableCamera)
 local TableUtils = require(script.Parent.TableUtils)
+local JumpLock = require(script.Parent.JumpLock)
+local FlipArmGesture = require(script.Parent.FlipArmGesture)
 
 local CardInteraction = {}
 
@@ -19,7 +22,6 @@ local activeTableId: string? = nil
 local isParticipant = false
 local gameMode: string? = nil
 local currentTurnUserId: number? = nil
-local isAnimating = false
 local clickConnections: { RBXScriptConnection } = {}
 
 local function clearClickConnections()
@@ -33,6 +35,100 @@ local function getTableModel(tableId: string): Model?
 	return TableUtils.getTableModel(tableId)
 end
 
+-- Radio en pantalla de la ficha (misma proyección que el cursor: WorldToViewportPoint).
+local function getCardScreenRadius(camera: Camera, card: BasePart): (Vector2, number, boolean)
+	local center3, onScreen = camera:WorldToViewportPoint(card.Position)
+	local center = Vector2.new(center3.X, center3.Y)
+	if center3.Z < 0 then
+		return center, 0, false
+	end
+
+	local size = card.Size
+	local hx, hy, hz = size.X / 2, size.Y / 2, size.Z / 2
+	local radius = 0
+	for _, localOffset in {
+		Vector3.new(hx, hy, hz),
+		Vector3.new(-hx, hy, hz),
+		Vector3.new(hx, hy, -hz),
+		Vector3.new(-hx, hy, -hz),
+		Vector3.new(hx, -hy, hz),
+		Vector3.new(-hx, -hy, -hz),
+	} do
+		local corner3 = camera:WorldToViewportPoint(card.CFrame:PointToWorldSpace(localOffset))
+		local dx = corner3.X - center.X
+		local dy = corner3.Y - center.Y
+		radius = math.max(radius, math.sqrt(dx * dx + dy * dy))
+	end
+
+	return center, radius, onScreen or center3.Z > 0
+end
+
+local function findCardAtScreenPoint(board: Instance, camera: Camera, clickX: number, clickY: number): BasePart?
+	local bestCard: BasePart? = nil
+	local bestDist = math.huge
+
+	for _, child in board:GetChildren() do
+		if not child:IsA("BasePart") then
+			continue
+		end
+		if child:GetAttribute("Matched") == true then
+			continue
+		end
+
+		local center, radius, usable = getCardScreenRadius(camera, child)
+		if not usable or radius < 4 then
+			continue
+		end
+
+		local dx = clickX - center.X
+		local dy = clickY - center.Y
+		local dist = math.sqrt(dx * dx + dy * dy)
+		-- Ligero margen para tap/click en el borde visual
+		if dist <= radius * 1.08 and dist < bestDist then
+			bestDist = dist
+			bestCard = child
+		end
+	end
+
+	return bestCard
+end
+
+local function tryFlipCardAtScreenPoint(tableId: string, clickX: number, clickY: number)
+	if not isParticipant or activeTableId ~= tableId then
+		return
+	end
+	if gameMode == CardData.MODES.Versus and currentTurnUserId ~= localPlayer.UserId then
+		return
+	end
+
+	local tableModel = getTableModel(tableId)
+	if not tableModel then
+		return
+	end
+	local board = tableModel:FindFirstChild("Board")
+	if not board then
+		return
+	end
+
+	local camera = workspace.CurrentCamera
+	if not camera then
+		return
+	end
+
+	local card = findCardAtScreenPoint(board, camera, clickX, clickY)
+	if not card then
+		return
+	end
+
+	local cardIndex = card:GetAttribute("CardIndex")
+	if typeof(cardIndex) ~= "number" then
+		return
+	end
+
+	FlipArmGesture.playLocal()
+	Remotes.RequestFlip:FireServer(tableId, cardIndex)
+end
+
 local function bindCardClicks(tableId: string)
 	clearClickConnections()
 
@@ -40,54 +136,50 @@ local function bindCardClicks(tableId: string)
 	if not tableModel then
 		return
 	end
-
 	local board = tableModel:FindFirstChild("Board")
 	if not board then
 		return
 	end
 
 	for _, card in board:GetChildren() do
-		if not card:IsA("BasePart") then
-			continue
+		if card:IsA("BasePart") then
+			card.CanQuery = true
+			local oldDetector = card:FindFirstChildOfClass("ClickDetector")
+			if oldDetector then
+				oldDetector:Destroy()
+			end
 		end
-
-		local cardIndex = card:GetAttribute("CardIndex")
-		if typeof(cardIndex) ~= "number" then
-			continue
-		end
-
-		local clickDetector = card:FindFirstChildOfClass("ClickDetector")
-		if not clickDetector then
-			continue
-		end
-
-		local connection = clickDetector.MouseClick:Connect(function(player)
-			if player ~= localPlayer then
-				return
-			end
-			if not isParticipant or isAnimating or activeTableId ~= tableId then
-				return
-			end
-			if gameMode == CardData.MODES.Versus and currentTurnUserId ~= localPlayer.UserId then
-				return
-			end
-			if card:GetAttribute("Matched") or card:GetAttribute("Revealed") then
-				return
-			end
-
-			Remotes.RequestFlip:FireServer(tableId, cardIndex)
-		end)
-
-		table.insert(clickConnections, connection)
 	end
+
+	local connection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed then
+			return
+		end
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		if activeTableId ~= tableId then
+			return
+		end
+
+		-- GetMouseLocation comparte espacio con WorldToViewportPoint (sin GuiInset).
+		-- En touch usamos input.Position (mismo espacio de viewport).
+		local clickPos = if input.UserInputType == Enum.UserInputType.Touch
+			then Vector2.new(input.Position.X, input.Position.Y)
+			else UserInputService:GetMouseLocation()
+
+		tryFlipCardAtScreenPoint(tableId, clickPos.X, clickPos.Y)
+	end)
+
+	table.insert(clickConnections, connection)
 end
 
 local function leaveGame()
 	isParticipant = false
 	activeTableId = nil
 	gameMode = nil
-	isAnimating = false
 	clearClickConnections()
+	JumpLock.unlock()
 	TableCamera.restore()
 	TableHud.hide()
 end
@@ -125,6 +217,8 @@ local function onGameStarted(tableId: string, payload: {
 	gameMode = payload.mode
 	currentTurnUserId = payload.currentTurnUserId
 
+	JumpLock.lock()
+
 	TableHud.show(tableId, payload.mode)
 	TableHud.setStatus("Mezclando cartas...")
 
@@ -136,6 +230,7 @@ local function onGameStarted(tableId: string, payload: {
 
 		local board = tableModel:WaitForChild("Board", 8)
 		if board and activeTableId == tableId then
+			CardAnimations3D.resetAllCards(tableId)
 			CardAnimations3D.orientBoardForLocalPlayer(tableId)
 			TableCamera.focusOnTable(tableId)
 			bindCardClicks(tableId)
@@ -146,7 +241,8 @@ local function onGameStarted(tableId: string, payload: {
 		if activeTableId ~= tableId then
 			return
 		end
-		isAnimating = false
+		CardAnimations3D.resetAllCards(tableId)
+		CardAnimations3D.orientBoardForLocalPlayer(tableId)
 		if gameMode == CardData.MODES.Solo then
 			TableHud.setStatus("Modo solitario")
 		elseif currentTurnUserId == localPlayer.UserId then
@@ -155,8 +251,6 @@ local function onGameStarted(tableId: string, payload: {
 			TableHud.setStatus("Turno del rival")
 		end
 	end)
-
-	isAnimating = true
 end
 
 function CardInteraction.init()
@@ -165,11 +259,14 @@ function CardInteraction.init()
 	TableHud.init(function()
 		if activeTableId then
 			Remotes.RequestQuit:FireServer(activeTableId)
+		else
+			leaveGame()
 		end
 	end, function()
 		if activeTableId then
-			Remotes.RequestRematch:FireServer(activeTableId)
+			Remotes.RequestQuit:FireServer(activeTableId)
 		end
+		leaveGame()
 	end)
 
 	Remotes.GameStarted.OnClientEvent:Connect(onGameStarted)
@@ -178,8 +275,12 @@ function CardInteraction.init()
 		if not isParticipant or activeTableId ~= tableId then
 			return
 		end
-		local card = nil
+		-- El rival ve el gesto del brazo; el local ya lo reprodujo al clickear.
+		if currentTurnUserId and currentTurnUserId ~= localPlayer.UserId then
+			FlipArmGesture.playForPlayer(Players:GetPlayerByUserId(currentTurnUserId))
+		end
 		local tableModel = TableUtils.getTableModel(tableId)
+		local card = nil
 		if tableModel then
 			local board = tableModel:FindFirstChild("Board")
 			if board then
@@ -226,13 +327,12 @@ function CardInteraction.init()
 		if not isParticipant or activeTableId ~= tableId then
 			return
 		end
-		isAnimating = true
 		local tableModel = TableUtils.getTableModel(tableId)
 		local at = if tableModel then TableUtils.getFocusPart(tableModel) else nil
 		SoundManager.playMismatch(at)
 		task.spawn(function()
 			CardAnimations3D.playMismatch(tableId, cardIndex1, cardIndex2)
-			isAnimating = false
+			CardAnimations3D.resetAllCards(tableId)
 			if gameMode == CardData.MODES.Solo then
 				TableHud.setStatus("Modo solitario")
 			elseif currentTurnUserId == localPlayer.UserId then
@@ -248,6 +348,7 @@ function CardInteraction.init()
 			return
 		end
 		currentTurnUserId = turnUserId
+		CardAnimations3D.resetAllCards(tableId)
 		if turnUserId == localPlayer.UserId then
 			TableHud.setStatus("Tu turno")
 		else
@@ -262,11 +363,14 @@ function CardInteraction.init()
 		local tableModel = TableUtils.getTableModel(tableId)
 		local at = if tableModel then TableUtils.getFocusPart(tableModel) else nil
 		SoundManager.playWin(at)
+
+		JumpLock.unlock()
+		TableCamera.restore()
 		TableHud.showResults(result)
 	end)
 
 	Remotes.GameCancelled.OnClientEvent:Connect(function(tableId)
-		if not isParticipant or activeTableId ~= tableId then
+		if activeTableId ~= tableId and not isParticipant then
 			return
 		end
 		leaveGame()

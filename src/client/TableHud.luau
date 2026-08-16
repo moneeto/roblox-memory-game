@@ -9,17 +9,14 @@ local screenGui: ScreenGui? = nil
 local statusLabel: TextLabel? = nil
 local resultsPanel: Frame? = nil
 local confirmOverlay: Frame? = nil
+local exitButton: TextButton? = nil
 
 local onQuitConfirm: (() -> ())? = nil
-local onRematch: (() -> ())? = nil
+local onAcceptResults: (() -> ())? = nil
 
-local function getScore(raw: { [any]: number }, userId: number): number
-	return raw[userId] or raw[tostring(userId)] or 0
-end
-
-function TableHud.init(quitCallback: () -> (), rematchCallback: () -> ())
+function TableHud.init(quitCallback: () -> (), acceptCallback: (() -> ())?)
 	onQuitConfirm = quitCallback
-	onRematch = rematchCallback
+	onAcceptResults = acceptCallback
 
 	if screenGui then
 		screenGui:Destroy()
@@ -47,7 +44,7 @@ function TableHud.init(quitCallback: () -> (), rematchCallback: () -> ())
 	statusCorner.CornerRadius = UDim.new(0, 8)
 	statusCorner.Parent = statusLabel
 
-	local exitButton = Instance.new("TextButton")
+	exitButton = Instance.new("TextButton")
 	exitButton.Name = "ExitButton"
 	exitButton.Size = UDim2.fromOffset(90, 34)
 	exitButton.Position = UDim2.new(1, -100, 0, 12)
@@ -135,7 +132,7 @@ function TableHud.init(quitCallback: () -> (), rematchCallback: () -> ())
 
 	resultsPanel = Instance.new("Frame")
 	resultsPanel.Name = "Results"
-	resultsPanel.Size = UDim2.fromOffset(360, 220)
+	resultsPanel.Size = UDim2.fromOffset(340, 160)
 	resultsPanel.AnchorPoint = Vector2.new(0.5, 0.5)
 	resultsPanel.Position = UDim2.fromScale(0.5, 0.5)
 	resultsPanel.BackgroundColor3 = Color3.fromRGB(44, 62, 80)
@@ -149,52 +146,40 @@ function TableHud.init(quitCallback: () -> (), rematchCallback: () -> ())
 
 	local resultsTitle = Instance.new("TextLabel")
 	resultsTitle.Name = "Title"
-	resultsTitle.Size = UDim2.new(1, -24, 0, 50)
+	resultsTitle.Size = UDim2.new(1, -24, 0, 70)
 	resultsTitle.Position = UDim2.fromOffset(12, 16)
 	resultsTitle.BackgroundTransparency = 1
 	resultsTitle.Font = Enum.Font.GothamBold
 	resultsTitle.TextSize = 24
 	resultsTitle.TextColor3 = Color3.fromRGB(236, 240, 241)
 	resultsTitle.Text = "Fin del juego"
+	resultsTitle.TextWrapped = true
 	resultsTitle.ZIndex = 21
 	resultsTitle.Parent = resultsPanel
 
-	local resultsBody = Instance.new("TextLabel")
-	resultsBody.Name = "Body"
-	resultsBody.Size = UDim2.new(1, -24, 0, 80)
-	resultsBody.Position = UDim2.fromOffset(12, 72)
-	resultsBody.BackgroundTransparency = 1
-	resultsBody.Font = Enum.Font.Gotham
-	resultsBody.TextSize = 18
-	resultsBody.TextColor3 = Color3.fromRGB(189, 195, 199)
-	resultsBody.TextWrapped = true
-	resultsBody.Text = ""
-	resultsBody.ZIndex = 21
-	resultsBody.Parent = resultsPanel
+	local acceptButton = Instance.new("TextButton")
+	acceptButton.Name = "AcceptButton"
+	acceptButton.Size = UDim2.fromOffset(180, 44)
+	acceptButton.AnchorPoint = Vector2.new(0.5, 1)
+	acceptButton.Position = UDim2.new(0.5, 0, 1, -20)
+	acceptButton.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
+	acceptButton.Font = Enum.Font.GothamBold
+	acceptButton.TextSize = 18
+	acceptButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+	acceptButton.Text = "Aceptar"
+	acceptButton.ZIndex = 21
+	acceptButton.Parent = resultsPanel
 
-	local rematchButton = Instance.new("TextButton")
-	rematchButton.Name = "RematchButton"
-	rematchButton.Size = UDim2.fromOffset(200, 44)
-	rematchButton.AnchorPoint = Vector2.new(0.5, 1)
-	rematchButton.Position = UDim2.new(0.5, 0, 1, -20)
-	rematchButton.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
-	rematchButton.Font = Enum.Font.GothamBold
-	rematchButton.TextSize = 18
-	rematchButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-	rematchButton.Text = "Jugar de nuevo"
-	rematchButton.ZIndex = 21
-	rematchButton.Parent = resultsPanel
+	local acceptCorner = Instance.new("UICorner")
+	acceptCorner.CornerRadius = UDim.new(0, 8)
+	acceptCorner.Parent = acceptButton
 
-	local rematchCorner = Instance.new("UICorner")
-	rematchCorner.CornerRadius = UDim.new(0, 8)
-	rematchCorner.Parent = rematchButton
-
-	rematchButton.MouseButton1Click:Connect(function()
+	acceptButton.MouseButton1Click:Connect(function()
 		if resultsPanel then
 			resultsPanel.Visible = false
 		end
-		if onRematch then
-			onRematch()
+		if onAcceptResults then
+			onAcceptResults()
 		end
 	end)
 end
@@ -204,7 +189,11 @@ function TableHud.show(_tableId: string, mode: string)
 		screenGui.Enabled = true
 	end
 	if statusLabel then
+		statusLabel.Visible = true
 		statusLabel.Text = if mode == "Solo" then "Modo solitario" else "Partida 1v1"
+	end
+	if exitButton then
+		exitButton.Visible = true
 	end
 	if resultsPanel then
 		resultsPanel.Visible = false
@@ -252,20 +241,11 @@ function TableHud.showResults(result: {
 		return
 	end
 
-	local title = resultsPanel:FindFirstChild("Title") :: TextLabel
-	local body = resultsPanel:FindFirstChild("Body") :: TextLabel
+	local title = resultsPanel:FindFirstChild("Title") :: TextLabel?
 
 	if result.mode == "Solo" then
 		if title then
 			title.Text = "¡Completaste el juego!"
-		end
-		if body then
-			body.Text = string.format(
-				"Intentos: %d\nTiempo: %ds\nPares: %d",
-				result.attempts or 0,
-				result.elapsedTime or 0,
-				result.pairs or 0
-			)
 		end
 	else
 		if title then
@@ -277,22 +257,21 @@ function TableHud.showResults(result: {
 				title.Text = "¡Empate!"
 			end
 		end
-		if body and result.scores then
-			local lines = {}
-			for userIdKey, score in result.scores do
-				local userId = if typeof(userIdKey) == "number" then userIdKey else tonumber(userIdKey)
-				if userId then
-					local plr = Players:GetPlayerByUserId(userId)
-					local name = if plr then plr.DisplayName else ("Jugador " .. userId)
-					table.insert(lines, string.format("%s: %d pares", name, score))
-				end
-			end
-			body.Text = table.concat(lines, "\n")
-		end
 	end
 
+	-- Solo cartel + Aceptar
+	if statusLabel then
+		statusLabel.Visible = false
+	end
+	if exitButton then
+		exitButton.Visible = false
+	end
+	TableHud.hideQuitConfirm()
+
 	resultsPanel.Visible = true
-	TableHud.setStatus("Partida terminada")
+	if screenGui then
+		screenGui.Enabled = true
+	end
 end
 
 return TableHud

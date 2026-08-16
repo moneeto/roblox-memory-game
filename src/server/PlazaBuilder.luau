@@ -82,7 +82,7 @@ local function createMemoryTable(
 
 	-- Mesa grande: las fichas (hasta 4x4) caben con margen
 	-- Eje largo en Z: Seat1 (usuario) <-> Seat2 (rival)
-	local tableSize = if mode == "Solo" then Vector3.new(10, 0.5, 14) else Vector3.new(12, 0.5, 16)
+	local tableSize = if mode == "Solo" then Vector3.new(10, 0.5, 14) else Vector3.new(12, 0.5, 14)
 
 	local tableTop = createPart({
 		Name = "TableTop",
@@ -131,6 +131,8 @@ local function createMemoryTable(
 	end
 
 	createStatusIndicator(tableModel, boardOrigin)
+
+	-- BoardBarrier se crea solo al iniciar partida (BoardBuilder), no en la plaza vacía.
 
 	tableModel.Parent = parent
 	CollectionService:AddTag(tableModel, TAG)

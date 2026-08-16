@@ -8,26 +8,30 @@ local TableCamera = {}
 
 local BIND_NAME = "MemoryTableCamera"
 local localPlayer = Players.LocalPlayer
-local savedCameraType: Enum.CameraType? = nil
-local savedCameraMode: Enum.CameraMode? = nil
 local activeTween: Tween? = nil
 local targetCFrame: CFrame? = nil
 local isBound = false
+local focused = false
+local focusToken = 0
 
 local function unbindCamera()
-	if isBound then
-		pcall(function()
-			RunService:UnbindFromRenderStep(BIND_NAME)
-		end)
-		isBound = false
-	end
+	pcall(function()
+		RunService:UnbindFromRenderStep(BIND_NAME)
+	end)
+	isBound = false
 	targetCFrame = nil
 end
 
-local function bindCamera(cframe: CFrame)
+local function bindCamera(cframe: CFrame, token: number)
+	if token ~= focusToken or not focused then
+		return
+	end
 	unbindCamera()
 	targetCFrame = cframe
 	RunService:BindToRenderStep(BIND_NAME, Enum.RenderPriority.Camera.Value + 1, function()
+		if not focused or token ~= focusToken then
+			return
+		end
 		local camera = workspace.CurrentCamera
 		if camera and targetCFrame then
 			camera.CFrame = targetCFrame
@@ -56,7 +60,6 @@ local function computeTableCameraCFrame(tableModel: Model): CFrame?
 		seatPos = seats[1]
 	end
 
-	-- Detrás del jugador local, mirando al tablero (y al rival)
 	local away = Vector3.new(seatPos.X - boardFocus.X, 0, seatPos.Z - boardFocus.Z)
 	if away.Magnitude < 0.05 then
 		away = Vector3.new(0, 0, -1)
@@ -91,18 +94,16 @@ function TableCamera.focusOnTable(tableId: string)
 		return
 	end
 
+	focusToken += 1
+	local token = focusToken
+
 	if activeTween then
 		activeTween:Cancel()
 		activeTween = nil
 	end
-
 	unbindCamera()
 
-	if savedCameraType == nil then
-		savedCameraType = camera.CameraType
-		savedCameraMode = localPlayer.CameraMode
-	end
-
+	focused = true
 	localPlayer.CameraMode = Enum.CameraMode.Classic
 	camera.CameraType = Enum.CameraType.Scriptable
 
@@ -110,39 +111,60 @@ function TableCamera.focusOnTable(tableId: string)
 		CFrame = desiredCFrame,
 	})
 	activeTween:Play()
-	activeTween.Completed:Connect(function()
-		bindCamera(desiredCFrame)
+	activeTween.Completed:Connect(function(playbackState)
+		if playbackState == Enum.PlaybackState.Cancelled then
+			return
+		end
+		if focused and token == focusToken then
+			bindCamera(desiredCFrame, token)
+		end
 	end)
 end
 
 function TableCamera.restore()
-	unbindCamera()
+	focusToken += 1
+	focused = false
 
 	if activeTween then
 		activeTween:Cancel()
 		activeTween = nil
 	end
+	unbindCamera()
 
-	local camera = workspace.CurrentCamera
-	if not camera then
-		return
-	end
+	local function applyFreeCamera()
+		local camera = workspace.CurrentCamera
+		if not camera then
+			return
+		end
 
-	camera.CameraType = savedCameraType or Enum.CameraType.Custom
-	if savedCameraMode then
-		localPlayer.CameraMode = savedCameraMode
-	end
+		camera.CameraType = Enum.CameraType.Custom
+		localPlayer.CameraMode = Enum.CameraMode.Classic
 
-	local character = localPlayer.Character
-	if character then
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		if humanoid then
-			camera.CameraSubject = humanoid
+		local character = localPlayer.Character
+		if character then
+			local humanoid = character:FindFirstChildOfClass("Humanoid")
+			if humanoid then
+				camera.CameraSubject = humanoid
+			end
 		end
 	end
 
-	savedCameraType = nil
-	savedCameraMode = nil
+	applyFreeCamera()
+	task.defer(applyFreeCamera)
+	task.delay(0.05, function()
+		if not focused then
+			applyFreeCamera()
+		end
+	end)
+	task.delay(0.2, function()
+		if not focused then
+			applyFreeCamera()
+		end
+	end)
+end
+
+function TableCamera.isFocused(): boolean
+	return focused
 end
 
 return TableCamera

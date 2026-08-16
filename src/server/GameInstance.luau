@@ -296,6 +296,7 @@ function GameInstance:endGame()
 	end
 
 	self:fireToParticipants(self.remotes.GameEnded, result)
+	BoardBuilder.removeBarrier(self.tableModel)
 end
 
 function GameInstance:cancelGame()
@@ -464,11 +465,22 @@ function GameInstance:requestRematch(player: Player)
 end
 
 function GameInstance:requestQuit(player: Player)
-	if not self:findParticipant(player) then
-		return
-	end
+	-- Permitir salir también si ya terminó la partida (botón Aceptar)
 	if self.status ~= "playing" and self.status ~= "ended" then
 		return
+	end
+
+	if self.status == "playing" and not self:findParticipant(player) then
+		return
+	end
+
+	-- Si terminó, cualquiera de los que estaban sentados puede aceptar/limpiar
+	if self.status == "ended" then
+		local seat1 = self.seatPlayers[1]
+		local seat2 = self.seatPlayers[2]
+		if player ~= seat1 and player ~= seat2 and not self:findParticipant(player) then
+			return
+		end
 	end
 
 	unseatPlayer(player)

@@ -5,11 +5,14 @@ local CardData = require(Shared.CardData)
 
 local BoardBuilder = {}
 
--- Fichas planas que caben en la mesa ampliada
 local CARD_SIZE = Vector3.new(1.15, 0.18, 1.45)
-local SPACING_X = 1.35
-local SPACING_Z = 1.65
+-- Tras rotación -90° en Y, el ancho visual en columnas usa Size.Z y en filas Size.X
+local GAP = 0.45
+local SPACING_X = CARD_SIZE.Z + GAP -- horizontal (columnas)
+local SPACING_Z = CARD_SIZE.X + GAP -- profundidad (filas)
 local MARGIN = 1.25
+-- Altura de la pared invisible sobre la mesa (solo durante la partida)
+local BARRIER_HEIGHT = 10
 
 local function getHorizontalDirection(from: Vector3, to: Vector3): Vector3
 	local delta = Vector3.new(to.X - from.X, 0, to.Z - from.Z)
@@ -33,7 +36,6 @@ local function resolveBoardOrigin(tableModel: Model): BasePart?
 		return nil
 	end
 
-	-- Eje del tablero: desde Seat1 hacia Seat2 (o LookVector del Seat1 en Solo)
 	local forward: Vector3
 	if seat1 and seat1:IsA("BasePart") and seat2 and seat2:IsA("BasePart") then
 		forward = getHorizontalDirection(seat1.Position, seat2.Position)
@@ -93,7 +95,6 @@ end
 local function getCardCFrame(boardOrigin: BasePart, row: number, col: number, rows: number, cols: number): CFrame
 	local totalWidth = (cols - 1) * SPACING_X
 	local totalDepth = (rows - 1) * SPACING_Z
-	-- Columnas izquierda→derecha desde Seat1; filas hacia el rival
 	local offsetX = (col - 1) * SPACING_X - totalWidth / 2
 	local offsetZ = (row - 1) * SPACING_Z - totalDepth / 2
 
@@ -103,15 +104,69 @@ local function getCardCFrame(boardOrigin: BasePart, row: number, col: number, ro
 		+ boardOrigin.CFrame.LookVector * offsetZ
 		+ Vector3.new(0, lift, 0)
 
-	-- Rotación: Top arriba; eje del texto alineado al eje Seat1→Seat2 (no de costado)
+	-- Plana sobre la mesa; SurfaceGui en Top queda pegado a la ficha
 	local base = CFrame.fromMatrix(
 		position,
 		boardOrigin.CFrame.RightVector,
 		Vector3.yAxis,
 		-boardOrigin.CFrame.LookVector
 	)
-	-- SurfaceGui en Top: el "arriba" del texto sigue el eje local -Z; giramos 90° para leer de frente
+	-- Ajuste para que el texto de SurfaceGui se lea desde Seat1
 	return base * CFrame.Angles(0, math.rad(-90), 0)
+end
+
+local function createSymbolSurface(name: string, enabled: boolean, text: string): SurfaceGui
+	local surface = Instance.new("SurfaceGui")
+	surface.Name = name
+	surface.Face = Enum.NormalId.Top
+	surface.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	surface.PixelsPerStud = 50
+	surface.LightInfluence = 0.2
+	surface.MaxDistance = 40
+	surface.Enabled = enabled
+
+	local label = Instance.new("TextLabel")
+	label.Name = if name == "FrontGui" then "Symbol" else "BackLabel"
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Text = text
+	label.TextScaled = true
+	label.Font = Enum.Font.GothamBold
+	label.TextColor3 = Color3.fromRGB(255, 255, 255)
+	label.Parent = surface
+
+	return surface
+end
+
+local function destroyBoardBarrier(tableModel: Model)
+	local existing = tableModel:FindFirstChild("BoardBarrier")
+	if existing then
+		existing:Destroy()
+	end
+end
+
+local function ensureBoardBarrier(tableModel: Model)
+	destroyBoardBarrier(tableModel)
+
+	local tableTop = tableModel:FindFirstChild("TableTop")
+	if not (tableTop and tableTop:IsA("BasePart")) then
+		return
+	end
+
+	-- Caja invisible sobre la mesa: evita que caminen sobre el tablero.
+	-- Altura editable arriba: BARRIER_HEIGHT
+	local halfHeight = BARRIER_HEIGHT / 2
+	local barrier = Instance.new("Part")
+	barrier.Name = "BoardBarrier"
+	barrier.Size = Vector3.new(tableTop.Size.X + 0.5, BARRIER_HEIGHT, tableTop.Size.Z + 0.5)
+	barrier.CFrame = tableTop.CFrame * CFrame.new(0, tableTop.Size.Y / 2 + halfHeight, 0)
+	barrier.Anchored = true
+	barrier.CanCollide = true
+	barrier.CanQuery = false
+	barrier.CanTouch = false
+	barrier.Transparency = 1
+	barrier.CastShadow = false
+	barrier.Parent = tableModel
 end
 
 function BoardBuilder.getRequiredTableSize(mode: string): Vector3
@@ -132,6 +187,8 @@ function BoardBuilder.build(tableModel: Model, mode: string): { BasePart }
 	local boardFolder = getBoardFolder(tableModel)
 	local cardParts: { BasePart } = {}
 
+	ensureBoardBarrier(tableModel)
+
 	local index = 0
 	for row = 1, rows do
 		for col = 1, cols do
@@ -142,6 +199,7 @@ function BoardBuilder.build(tableModel: Model, mode: string): { BasePart }
 			card.Size = CARD_SIZE
 			card.Anchored = true
 			card.CanCollide = false
+			card.CanQuery = true
 			card.Color = CardData.CARD_BACK_COLOR
 			card.Material = Enum.Material.SmoothPlastic
 			card.TopSurface = Enum.SurfaceType.Smooth
@@ -154,42 +212,12 @@ function BoardBuilder.build(tableModel: Model, mode: string): { BasePart }
 			local rest = getCardCFrame(boardOrigin, row, col, rows, cols)
 			storeRestCFrame(card, rest)
 
-			local clickDetector = Instance.new("ClickDetector")
-			clickDetector.MaxActivationDistance = 64
-			clickDetector.Parent = card
-
-			local frontGui = Instance.new("SurfaceGui")
-			frontGui.Name = "FrontGui"
-			frontGui.Face = Enum.NormalId.Top
-			frontGui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
-			frontGui.PixelsPerStud = 50
-			frontGui.Enabled = false
+			-- Símbolos pegados a la cara superior (no flotan ni se ven a lo lejos como Billboard)
+			local frontGui = createSymbolSurface("FrontGui", false, "")
 			frontGui.Parent = card
 
-			local symbol = Instance.new("TextLabel")
-			symbol.Name = "Symbol"
-			symbol.Size = UDim2.fromScale(1, 1)
-			symbol.BackgroundTransparency = 1
-			symbol.TextScaled = true
-			symbol.Font = Enum.Font.GothamBold
-			symbol.TextColor3 = Color3.fromRGB(255, 255, 255)
-			symbol.Parent = frontGui
-
-			local backGui = Instance.new("SurfaceGui")
-			backGui.Name = "BackGui"
-			backGui.Face = Enum.NormalId.Top
-			backGui.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
-			backGui.PixelsPerStud = 50
+			local backGui = createSymbolSurface("BackGui", true, "?")
 			backGui.Parent = card
-
-			local backLabel = Instance.new("TextLabel")
-			backLabel.Size = UDim2.fromScale(1, 1)
-			backLabel.BackgroundTransparency = 1
-			backLabel.Text = "?"
-			backLabel.TextScaled = true
-			backLabel.Font = Enum.Font.GothamBold
-			backLabel.TextColor3 = Color3.fromRGB(236, 240, 241)
-			backLabel.Parent = backGui
 
 			table.insert(cardParts, card)
 		end
@@ -204,6 +232,11 @@ function BoardBuilder.destroy(tableModel: Model)
 	if board then
 		board:Destroy()
 	end
+	destroyBoardBarrier(tableModel)
+end
+
+function BoardBuilder.removeBarrier(tableModel: Model)
+	destroyBoardBarrier(tableModel)
 end
 
 function BoardBuilder.revealCard(cardPart: BasePart, iconId: number)
@@ -211,17 +244,17 @@ function BoardBuilder.revealCard(cardPart: BasePart, iconId: number)
 	cardPart.Color = pair.color
 	cardPart:SetAttribute("Revealed", true)
 
-	local frontGui = cardPart:FindFirstChild("FrontGui") :: SurfaceGui?
-	if frontGui then
+	local frontGui = cardPart:FindFirstChild("FrontGui")
+	if frontGui and frontGui:IsA("SurfaceGui") then
 		frontGui.Enabled = true
-		local symbol = frontGui:FindFirstChild("Symbol") :: TextLabel?
-		if symbol then
+		local symbol = frontGui:FindFirstChild("Symbol")
+		if symbol and symbol:IsA("TextLabel") then
 			symbol.Text = pair.symbol
 		end
 	end
 
-	local backGui = cardPart:FindFirstChild("BackGui") :: SurfaceGui?
-	if backGui then
+	local backGui = cardPart:FindFirstChild("BackGui")
+	if backGui and backGui:IsA("SurfaceGui") then
 		backGui.Enabled = false
 	end
 end
@@ -230,13 +263,13 @@ function BoardBuilder.hideCard(cardPart: BasePart)
 	cardPart.Color = CardData.CARD_BACK_COLOR
 	cardPart:SetAttribute("Revealed", false)
 
-	local frontGui = cardPart:FindFirstChild("FrontGui") :: SurfaceGui?
-	if frontGui then
+	local frontGui = cardPart:FindFirstChild("FrontGui")
+	if frontGui and frontGui:IsA("SurfaceGui") then
 		frontGui.Enabled = false
 	end
 
-	local backGui = cardPart:FindFirstChild("BackGui") :: SurfaceGui?
-	if backGui then
+	local backGui = cardPart:FindFirstChild("BackGui")
+	if backGui and backGui:IsA("SurfaceGui") then
 		backGui.Enabled = true
 	end
 

@@ -133,25 +133,12 @@ local function handleSeatChange(game: any)
 	updateStatusIndicator(tableModel, game.mode)
 
 	local status = game:getStatus()
-	if status == "playing" then
-		local shouldCancel = false
-		if game.mode == "Solo" then
-			local solo = game:getPlayers()[1]
-			if solo and player1 ~= solo and player2 ~= solo then
-				shouldCancel = true
-			end
-		elseif not player1 or not player2 then
-			shouldCancel = true
-		end
-
-		if shouldCancel then
-			warn("[MemoryGame] Cancelando partida (jugador se levantó):", game.tableId)
-			game:cancelGame()
-		end
+	-- Durante la partida NO se cancela al levantarse: solo con botón Salir.
+	-- El cliente bloquea el salto para evitar salir del asiento por accidente.
+	if status == "playing" or status == "ended" then
 		return
 	end
 
-	-- Pequeño delay para que Occupant termine de resolverse en Studio multi-cliente
 	task.delay(0.15, function()
 		tryStartGame(game)
 	end)
