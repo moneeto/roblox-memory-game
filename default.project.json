@@ -1,0 +1,52 @@
+{
+  "name": "roblox-memory-game",
+  "tree": {
+    "$className": "DataModel",
+
+    "ReplicatedStorage": {
+      "Shared": {
+        "$path": "src/shared"
+      }
+    },
+
+    "ServerScriptService": {
+      "Server": {
+        "$path": "src/server"
+      }
+    },
+
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "Client": {
+          "$path": "src/client"
+        }
+      }
+    },
+
+    "Workspace": {
+      "$properties": {
+        "FilteringEnabled": true,
+        "FallenPartsDestroyHeight": -500
+      }
+    },
+    "Lighting": {
+      "$properties": {
+        "Ambient": [
+          0.4,
+          0.4,
+          0.4
+        ],
+        "Brightness": 2.5,
+        "ClockTime": 14,
+        "GlobalShadows": true,
+        "Outlines": false,
+        "Technology": "Voxel"
+      }
+    },
+    "SoundService": {
+      "$properties": {
+        "RespectFilteringEnabled": true
+      }
+    }
+  }
+}
