@@ -9,7 +9,7 @@ local PlazaConfig = require(Shared.PlazaConfig)
 local PlazaBuilder = {}
 
 local TAG = "MemoryTable"
-local plazaModel: Model? = nil
+local ANCHORS_FOLDER_NAME = "TableAnchors"
 
 local function createPart(props: {
 	Name: string,
@@ -18,6 +18,7 @@ local function createPart(props: {
 	Color: Color3,
 	Material: Enum.Material,
 	Transparency: number?,
+	CanCollide: boolean?,
 	Parent: Instance,
 }): Part
 	local part = Instance.new("Part")
@@ -25,9 +26,12 @@ local function createPart(props: {
 	part.Size = props.Size
 	part.CFrame = props.CFrame
 	part.Anchored = true
+	part.CanCollide = if props.CanCollide == nil then true else props.CanCollide
 	part.Color = props.Color
 	part.Material = props.Material
 	part.Transparency = props.Transparency or 0
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
 	part.Parent = props.Parent
 	return part
 end
@@ -55,12 +59,12 @@ local function createStatusIndicator(tableModel: Model, boardOrigin: BasePart)
 	local label = Instance.new("TextLabel")
 	label.Name = "Label"
 	label.Size = UDim2.fromScale(1, 1)
-	label.BackgroundTransparency = 0.3
-	label.BackgroundColor3 = Color3.fromRGB(44, 62, 80)
+	label.BackgroundTransparency = 0.25
+	label.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
 	label.Text = "0/1"
 	label.TextScaled = true
 	label.Font = Enum.Font.GothamBold
-	label.TextColor3 = Color3.fromRGB(255, 255, 255)
+	label.TextColor3 = Color3.fromRGB(212, 175, 55)
 	label.Parent = billboard
 
 	local corner = Instance.new("UICorner")
@@ -69,7 +73,7 @@ local function createStatusIndicator(tableModel: Model, boardOrigin: BasePart)
 end
 
 local function createMemoryTable(
-	parent: Model,
+	parent: Instance,
 	tableName: string,
 	mode: "Solo" | "Versus",
 	floorPosition: Vector3
@@ -79,17 +83,15 @@ local function createMemoryTable(
 	tableModel:SetAttribute("Mode", mode)
 
 	local center = floorPosition + Vector3.new(0, 1.25, 0)
-
-	-- Mesa grande: las fichas (hasta 4x4) caben con margen
-	-- Eje largo en Z: Seat1 (usuario) <-> Seat2 (rival)
 	local tableSize = if mode == "Solo" then Vector3.new(10, 0.5, 14) else Vector3.new(12, 0.5, 14)
+	local tableCf = CFrame.new(center) * CFrame.Angles(0, PlazaConfig.TABLE_YAW, 0)
 
 	local tableTop = createPart({
 		Name = "TableTop",
 		Size = tableSize,
-		CFrame = CFrame.new(center),
-		Color = Color3.fromRGB(139, 90, 43),
-		Material = Enum.Material.Wood,
+		CFrame = tableCf,
+		Color = Color3.fromRGB(110, 24, 45),
+		Material = Enum.Material.SmoothPlastic,
 		Parent = tableModel,
 	})
 	tableModel.PrimaryPart = tableTop
@@ -97,7 +99,7 @@ local function createMemoryTable(
 	local boardOrigin = createPart({
 		Name = "BoardOrigin",
 		Size = Vector3.new(1, 0.05, 1),
-		CFrame = CFrame.new(center + Vector3.new(0, 0.35, 0)),
+		CFrame = tableCf * CFrame.new(0, 0.35, 0),
 		Color = Color3.fromRGB(127, 140, 141),
 		Material = Enum.Material.SmoothPlastic,
 		Transparency = 1,
@@ -111,9 +113,9 @@ local function createMemoryTable(
 	seat1.Size = Vector3.new(2, 0.5, 2)
 	seat1.Anchored = true
 	seat1.Disabled = false
-	seat1.Color = Color3.fromRGB(192, 57, 43)
+	seat1.Color = Color3.fromRGB(46, 125, 80)
 	seat1.Material = Enum.Material.Fabric
-	seat1.CFrame = CFrame.new(center + Vector3.new(0, -0.5, -seatDistance))
+	seat1.CFrame = tableCf * CFrame.new(0, -0.5, -seatDistance)
 	seat1.Parent = tableModel
 	orientSeatToward(seat1, center)
 
@@ -123,16 +125,14 @@ local function createMemoryTable(
 		seat2.Size = Vector3.new(2, 0.5, 2)
 		seat2.Anchored = true
 		seat2.Disabled = false
-		seat2.Color = Color3.fromRGB(41, 128, 185)
+		seat2.Color = Color3.fromRGB(212, 175, 55)
 		seat2.Material = Enum.Material.Fabric
-		seat2.CFrame = CFrame.new(center + Vector3.new(0, -0.5, seatDistance))
+		seat2.CFrame = tableCf * CFrame.new(0, -0.5, seatDistance)
 		seat2.Parent = tableModel
 		orientSeatToward(seat2, center)
 	end
 
 	createStatusIndicator(tableModel, boardOrigin)
-
-	-- BoardBarrier se crea solo al iniciar partida (BoardBuilder), no en la plaza vacía.
 
 	tableModel.Parent = parent
 	CollectionService:AddTag(tableModel, TAG)
@@ -140,82 +140,61 @@ local function createMemoryTable(
 	return tableModel
 end
 
-local function buildEnvironment(parent: Model, baseY: number)
-	createPart({
-		Name = "MainFloor",
-		Size = Vector3.new(160, 1, 100),
-		CFrame = CFrame.new(0, baseY - 0.5, 0),
-		Color = Color3.fromRGB(189, 195, 199),
-		Material = Enum.Material.Concrete,
-		Parent = parent,
-	})
-
-	createPart({
-		Name = "PlayArea",
-		Size = Vector3.new(140, 0.2, 80),
-		CFrame = CFrame.new(0, baseY + 0.05, 0),
-		Color = Color3.fromRGB(76, 175, 80),
-		Material = Enum.Material.Grass,
-		Parent = parent,
-	})
-
-	local welcomeSign = createPart({
-		Name = "WelcomeSign",
-		Size = Vector3.new(14, 4, 0.4),
-		CFrame = CFrame.new(0, baseY + 3, -45),
-		Color = Color3.fromRGB(41, 128, 185),
-		Material = Enum.Material.SmoothPlastic,
-		Parent = parent,
-	})
-
-	local welcomeGui = Instance.new("SurfaceGui")
-	welcomeGui.Face = Enum.NormalId.Front
-	welcomeGui.Parent = welcomeSign
-
-	local welcomeLabel = Instance.new("TextLabel")
-	welcomeLabel.Size = UDim2.fromScale(1, 1)
-	welcomeLabel.BackgroundTransparency = 1
-	welcomeLabel.Text = "CENTRO RECREATIVO\nJuego de memoria"
-	welcomeLabel.TextScaled = true
-	welcomeLabel.Font = Enum.Font.GothamBold
-	welcomeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-	welcomeLabel.Parent = welcomeGui
-end
-
-local function prepareWorld()
-	if PlazaConfig.DESTROY_BASEPLATE then
-		local baseplate = Workspace:FindFirstChild("Baseplate")
-		if baseplate then
-			baseplate:Destroy()
-		end
+local function resolveAnchorPosition(anchorName: string, fallback: Vector3): Vector3
+	local folder = Workspace:FindFirstChild(ANCHORS_FOLDER_NAME)
+	if not folder then
+		return PlazaConfig.getFloorPosition(fallback)
 	end
 
+	local anchor = folder:FindFirstChild(anchorName)
+	if not anchor then
+		return PlazaConfig.getFloorPosition(fallback)
+	end
+
+	if anchor:IsA("BasePart") then
+		return Vector3.new(anchor.Position.X, PlazaConfig.BASE_Y, anchor.Position.Z)
+	end
+	if anchor:IsA("Attachment") then
+		local world = anchor.WorldPosition
+		return Vector3.new(world.X, PlazaConfig.BASE_Y, world.Z)
+	end
+
+	return PlazaConfig.getFloorPosition(fallback)
+end
+
+local function prepareDayLighting()
 	Lighting.ClockTime = 14
 	Lighting.Brightness = 2.5
-	Lighting.OutdoorAmbient = Color3.fromRGB(140, 140, 140)
-end
+	Lighting.Ambient = Color3.fromRGB(120, 120, 125)
+	Lighting.OutdoorAmbient = Color3.fromRGB(140, 140, 145)
+	Lighting.FogEnd = 100000
+	Lighting.FogStart = 0
+	Lighting.GlobalShadows = true
 
-local function clearStalePlazas()
-	for _, child in Workspace:GetChildren() do
-		if child.Name == "MemoryPlaza" then
-			child:Destroy()
-		end
+	local atmosphere = Lighting:FindFirstChildOfClass("Atmosphere")
+	if atmosphere then
+		atmosphere.Density = 0.2
+		atmosphere.Haze = 0
+		atmosphere.Glare = 0.1
 	end
+
+	-- Si algún script o plugin mueve el reloj, lo volvemos al mediodía.
+	Lighting:GetPropertyChangedSignal("ClockTime"):Connect(function()
+		if math.abs(Lighting.ClockTime - 14) > 0.05 then
+			Lighting.ClockTime = 14
+		end
+	end)
 end
 
-local function buildPlaza()
-	clearStalePlazas()
-	plazaModel = nil
+local function ensureSpawn()
+	if not PlazaConfig.ENSURE_SPAWN then
+		return
+	end
 
-	prepareWorld()
-
-	plazaModel = Instance.new("Model")
-	plazaModel.Name = "MemoryPlaza"
-
-	local baseY = PlazaConfig.BASE_Y
-
-	if PlazaConfig.BUILD_ENVIRONMENT then
-		buildEnvironment(plazaModel, baseY)
+	for _, descendant in Workspace:GetDescendants() do
+		if descendant:IsA("SpawnLocation") then
+			return
+		end
 	end
 
 	local spawn = Instance.new("SpawnLocation")
@@ -227,39 +206,55 @@ local function buildPlaza()
 	spawn.Transparency = 1
 	spawn.Duration = 0
 	spawn.Neutral = true
-	spawn.Parent = plazaModel
+	spawn.Parent = Workspace
+end
+
+local function clearGeneratedTables()
+	for _, tagged in CollectionService:GetTagged(TAG) do
+		if tagged:IsA("Model") and tagged:GetAttribute("GeneratedByPlazaBuilder") == true then
+			tagged:Destroy()
+		end
+	end
+
+	local existing = Workspace:FindFirstChild("MemoryTables")
+	if existing then
+		existing:Destroy()
+	end
+end
+
+local function buildTables()
+	clearGeneratedTables()
+	prepareDayLighting()
+	ensureSpawn()
+
+	local tablesFolder = Instance.new("Folder")
+	tablesFolder.Name = "MemoryTables"
+	tablesFolder.Parent = Workspace
 
 	for index, offset in PlazaConfig.SOLO_OFFSETS do
-		createMemoryTable(
-			plazaModel,
-			"Table_Solo_" .. index,
-			"Solo",
-			PlazaConfig.getFloorPosition(offset)
-		)
+		local floorPos = resolveAnchorPosition("Solo_" .. index, offset)
+		local model = createMemoryTable(tablesFolder, "Table_Solo_" .. index, "Solo", floorPos)
+		model:SetAttribute("GeneratedByPlazaBuilder", true)
 	end
 
 	for index, offset in PlazaConfig.VERSUS_OFFSETS do
-		createMemoryTable(
-			plazaModel,
-			"Table_Versus_" .. index,
-			"Versus",
-			PlazaConfig.getFloorPosition(offset)
-		)
+		local floorPos = resolveAnchorPosition("Versus_" .. index, offset)
+		local model = createMemoryTable(tablesFolder, "Table_Versus_" .. index, "Versus", floorPos)
+		model:SetAttribute("GeneratedByPlazaBuilder", true)
 	end
 
-	plazaModel.Parent = Workspace
 	warn(
-		"[MemoryGame] Plaza creada:",
+		"[MemoryGame] Mesas generadas:",
 		PlazaConfig.SOLO_COUNT,
 		"solo +",
 		PlazaConfig.VERSUS_COUNT,
-		"versus en Y =",
-		baseY
+		"versus @ Y =",
+		PlazaConfig.BASE_Y
 	)
 end
 
 function PlazaBuilder.init()
-	buildPlaza()
+	buildTables()
 end
 
 return PlazaBuilder

@@ -125,15 +125,36 @@ local function createSymbolSurface(name: string, enabled: boolean, text: string)
 	surface.MaxDistance = 40
 	surface.Enabled = enabled
 
-	local label = Instance.new("TextLabel")
-	label.Name = if name == "FrontGui" then "Symbol" else "BackLabel"
-	label.Size = UDim2.fromScale(1, 1)
-	label.BackgroundTransparency = 1
-	label.Text = text
-	label.TextScaled = true
-	label.Font = Enum.Font.GothamBold
-	label.TextColor3 = Color3.fromRGB(255, 255, 255)
-	label.Parent = surface
+	if name == "FrontGui" then
+		local image = Instance.new("ImageLabel")
+		image.Name = "MemeImage"
+		image.Size = UDim2.fromScale(1, 1)
+		image.BackgroundTransparency = 1
+		image.ScaleType = Enum.ScaleType.Fit
+		image.Image = ""
+		image.Visible = false
+		image.Parent = surface
+
+		local label = Instance.new("TextLabel")
+		label.Name = "Symbol"
+		label.Size = UDim2.fromScale(1, 1)
+		label.BackgroundTransparency = 1
+		label.Text = text
+		label.TextScaled = true
+		label.Font = Enum.Font.GothamBold
+		label.TextColor3 = Color3.fromRGB(255, 255, 255)
+		label.Parent = surface
+	else
+		local label = Instance.new("TextLabel")
+		label.Name = "BackLabel"
+		label.Size = UDim2.fromScale(1, 1)
+		label.BackgroundTransparency = 1
+		label.Text = text
+		label.TextScaled = true
+		label.Font = Enum.Font.GothamBold
+		label.TextColor3 = Color3.fromRGB(255, 255, 255)
+		label.Parent = surface
+	end
 
 	return surface
 end
@@ -176,7 +197,20 @@ function BoardBuilder.getRequiredTableSize(mode: string): Vector3
 	return Vector3.new(math.max(width, 10), 0.5, math.max(depth, 12))
 end
 
-function BoardBuilder.build(tableModel: Model, mode: string): { BasePart }
+export type CardSkinAppearance = {
+	Color: Color3,
+	Material: Enum.Material,
+	TextureId: string?,
+}
+
+local function resolveCardBack(cardSkin: CardSkinAppearance?): (Color3, Enum.Material)
+	if cardSkin then
+		return cardSkin.Color, cardSkin.Material
+	end
+	return CardData.CARD_BACK_COLOR, Enum.Material.SmoothPlastic
+end
+
+function BoardBuilder.build(tableModel: Model, mode: string, cardSkin: CardSkinAppearance?): { BasePart }
 	local boardOrigin = resolveBoardOrigin(tableModel)
 	if not boardOrigin then
 		warn("[MemoryGame] BoardOrigin no encontrado en", tableModel.Name)
@@ -186,6 +220,7 @@ function BoardBuilder.build(tableModel: Model, mode: string): { BasePart }
 	local rows, cols = CardData.getGridForMode(mode)
 	local boardFolder = getBoardFolder(tableModel)
 	local cardParts: { BasePart } = {}
+	local backColor, backMaterial = resolveCardBack(cardSkin)
 
 	ensureBoardBarrier(tableModel)
 
@@ -200,13 +235,18 @@ function BoardBuilder.build(tableModel: Model, mode: string): { BasePart }
 			card.Anchored = true
 			card.CanCollide = false
 			card.CanQuery = true
-			card.Color = CardData.CARD_BACK_COLOR
-			card.Material = Enum.Material.SmoothPlastic
+			card.Color = backColor
+			card.Material = backMaterial
 			card.TopSurface = Enum.SurfaceType.Smooth
 			card.BottomSurface = Enum.SurfaceType.Smooth
 			card:SetAttribute("CardIndex", index)
 			card:SetAttribute("Revealed", false)
 			card:SetAttribute("Matched", false)
+			-- Guardamos el dorso equipado para hideCard
+			card:SetAttribute("BackColorR", math.floor(backColor.R * 255 + 0.5))
+			card:SetAttribute("BackColorG", math.floor(backColor.G * 255 + 0.5))
+			card:SetAttribute("BackColorB", math.floor(backColor.B * 255 + 0.5))
+			card:SetAttribute("BackMaterial", backMaterial.Name)
 			card.Parent = boardFolder
 
 			local rest = getCardCFrame(boardOrigin, row, col, rows, cols)
@@ -239,17 +279,42 @@ function BoardBuilder.removeBarrier(tableModel: Model)
 	destroyBoardBarrier(tableModel)
 end
 
-function BoardBuilder.revealCard(cardPart: BasePart, iconId: number)
+export type PairFace = {
+	imageId: string?,
+	color: Color3,
+	symbol: string,
+}
+
+function BoardBuilder.revealCard(cardPart: BasePart, iconId: number, face: PairFace?)
 	local pair = CardData.getPairById(iconId)
-	cardPart.Color = pair.color
+	local color = if face then face.color else pair.color
+	local symbol = if face then face.symbol else pair.symbol
+	local imageId = if face then (face.imageId or "") else ""
+
+	cardPart.Color = color
 	cardPart:SetAttribute("Revealed", true)
 
 	local frontGui = cardPart:FindFirstChild("FrontGui")
 	if frontGui and frontGui:IsA("SurfaceGui") then
 		frontGui.Enabled = true
-		local symbol = frontGui:FindFirstChild("Symbol")
-		if symbol and symbol:IsA("TextLabel") then
-			symbol.Text = pair.symbol
+
+		local memeImage = frontGui:FindFirstChild("MemeImage")
+		local symbolLabel = frontGui:FindFirstChild("Symbol")
+
+		local hasImage = typeof(imageId) == "string" and imageId ~= ""
+		if memeImage and memeImage:IsA("ImageLabel") then
+			if hasImage then
+				memeImage.Image = imageId
+				memeImage.Visible = true
+			else
+				memeImage.Image = ""
+				memeImage.Visible = false
+			end
+		end
+
+		if symbolLabel and symbolLabel:IsA("TextLabel") then
+			symbolLabel.Text = symbol
+			symbolLabel.Visible = not hasImage
 		end
 	end
 
@@ -259,8 +324,32 @@ function BoardBuilder.revealCard(cardPart: BasePart, iconId: number)
 	end
 end
 
+local function getStoredBackColor(cardPart: BasePart): Color3
+	local r = cardPart:GetAttribute("BackColorR")
+	local g = cardPart:GetAttribute("BackColorG")
+	local b = cardPart:GetAttribute("BackColorB")
+	if typeof(r) == "number" and typeof(g) == "number" and typeof(b) == "number" then
+		return Color3.fromRGB(r, g, b)
+	end
+	return CardData.CARD_BACK_COLOR
+end
+
+local function getStoredBackMaterial(cardPart: BasePart): Enum.Material
+	local name = cardPart:GetAttribute("BackMaterial")
+	if typeof(name) == "string" then
+		local ok, material = pcall(function()
+			return (Enum.Material :: any)[name]
+		end)
+		if ok and material then
+			return material
+		end
+	end
+	return Enum.Material.SmoothPlastic
+end
+
 function BoardBuilder.hideCard(cardPart: BasePart)
-	cardPart.Color = CardData.CARD_BACK_COLOR
+	cardPart.Color = getStoredBackColor(cardPart)
+	cardPart.Material = getStoredBackMaterial(cardPart)
 	cardPart:SetAttribute("Revealed", false)
 
 	local frontGui = cardPart:FindFirstChild("FrontGui")

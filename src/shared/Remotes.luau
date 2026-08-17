@@ -15,6 +15,15 @@ local REMOTE_NAMES = {
 	"GamePaused",
 	"GameResumed",
 	"GameCancelled",
+	-- Progresión / tienda
+	"StreakUpdated",
+	"PointsAwarded",
+	"PlayerDataUpdated",
+	"RequestPlayerData",
+	"RequestPurchaseSkin",
+	"RequestEquipSkin",
+	"RequestPurchaseMemePack",
+	"ShopResult",
 }
 
 local Remotes = {}

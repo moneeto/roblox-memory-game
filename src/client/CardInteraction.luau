@@ -13,6 +13,7 @@ local TableCamera = require(script.Parent.TableCamera)
 local TableUtils = require(script.Parent.TableUtils)
 local JumpLock = require(script.Parent.JumpLock)
 local FlipArmGesture = require(script.Parent.FlipArmGesture)
+local ComboEffect = require(script.Parent.ComboEffect)
 
 local CardInteraction = {}
 
@@ -255,6 +256,7 @@ end
 
 function CardInteraction.init()
 	Remotes.init()
+	ComboEffect.init()
 
 	TableHud.init(function()
 		if activeTableId then
@@ -270,6 +272,10 @@ function CardInteraction.init()
 	end)
 
 	Remotes.GameStarted.OnClientEvent:Connect(onGameStarted)
+
+	Remotes.StreakUpdated.OnClientEvent:Connect(function(_tableId, streak, multiplier, pointsGained)
+		ComboEffect.show(streak, multiplier, pointsGained)
+	end)
 
 	Remotes.CardRevealed.OnClientEvent:Connect(function(tableId, cardIndex, _iconId)
 		if not isParticipant or activeTableId ~= tableId then

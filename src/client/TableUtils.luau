@@ -12,11 +12,13 @@ function TableUtils.getTableModel(tableId: string): Model?
 		end
 	end
 
-	local plaza = workspace:FindFirstChild("MemoryPlaza")
-	if plaza then
-		local found = plaza:FindFirstChild(tableId)
-		if found and found:IsA("Model") then
-			return found
+	for _, folderName in { "MemoryTables", "MemoryPlaza" } do
+		local folder = workspace:FindFirstChild(folderName)
+		if folder then
+			local found = folder:FindFirstChild(tableId, true)
+			if found and found:IsA("Model") then
+				return found
+			end
 		end
 	end
 

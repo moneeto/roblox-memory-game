@@ -3,7 +3,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local CardData = require(Shared.CardData)
+local ProgressConfig = require(Shared.ProgressConfig)
+local MemeCatalog = require(Shared.MemeCatalog)
 local BoardBuilder = require(script.Parent.BoardBuilder)
+local PlayerDataService = require(script.Parent.PlayerDataService)
+local SkinApplier = require(script.Parent.SkinApplier)
 
 export type GameMode = "Solo" | "Versus"
 export type GameStatus = "waiting" | "playing" | "ended"
@@ -32,6 +36,10 @@ export type GameInstance = typeof(setmetatable({} :: {
 	attempts: number,
 	startedAt: number,
 	seatPlayers: { Player? },
+	-- Racha (combo) por jugador dentro de la partida actual
+	streaks: { [Player]: number },
+	-- Cara visual por id de par (1..N) elegida al azar del pool de memes
+	pairFaces: { [number]: MemeCatalog.PairFace },
 }, GameInstance))
 
 local function fisherYatesShuffle(values: { number }): { number }
@@ -72,6 +80,8 @@ function GameInstance.new(tableModel: Model, mode: GameMode, remotes: any): Game
 	self.attempts = 0
 	self.startedAt = 0
 	self.seatPlayers = {}
+	self.streaks = {}
+	self.pairFaces = {}
 	return self
 end
 
@@ -106,8 +116,37 @@ function GameInstance:fireToParticipants(remote: RemoteEvent, ...: any)
 	end
 end
 
+function GameInstance:resolveUnlockedMemePacks(players: { Player }): { string }
+	local seen = {}
+	local packs = {}
+
+	for _, defaultId in MemeCatalog.getDefaultUnlockedPackIds() do
+		seen[defaultId] = true
+		table.insert(packs, defaultId)
+	end
+
+	for _, player in players do
+		for _, packId in PlayerDataService.getUnlockedMemePacks(player) do
+			if not seen[packId] then
+				seen[packId] = true
+				table.insert(packs, packId)
+			end
+		end
+	end
+
+	return packs
+end
+
 function GameInstance:generateShuffledCards(): { CardState }
 	local pairCount = CardData.getPairCount(self.mode)
+	local unlockedPacks = self:resolveUnlockedMemePacks(self.players)
+	local faces = MemeCatalog.pickRandomFaces(pairCount, unlockedPacks)
+
+	self.pairFaces = {}
+	for index, face in faces do
+		self.pairFaces[index] = face
+	end
+
 	local ids: { number } = {}
 	for id = 1, pairCount do
 		table.insert(ids, id)
@@ -173,6 +212,8 @@ function GameInstance:resetState()
 	self.isEvaluating = false
 	self.attempts = 0
 	self.startedAt = 0
+	self.streaks = {}
+	self.pairFaces = {}
 end
 
 function GameInstance:prepareForRestart()
@@ -182,6 +223,8 @@ function GameInstance:prepareForRestart()
 	self.revealed = {}
 	self.status = "waiting"
 	self.isEvaluating = false
+	self.streaks = {}
+	self.pairFaces = {}
 end
 
 function GameInstance:startGame(players: { Player })
@@ -192,23 +235,31 @@ function GameInstance:startGame(players: { Player })
 		return
 	end
 
+	self.players = players
 	self.cards = self:generateShuffledCards()
 	self.revealed = {}
-	self.players = players
 	self.scores = {}
 	for _, player in players do
 		self.scores[player] = 0
+		self.streaks[player] = 0
 	end
 	self.currentTurn = players[1]
 	self.isEvaluating = false
 	self.attempts = 0
 	self.startedAt = os.clock()
 
-	self.cardParts = BoardBuilder.build(self.tableModel, self.mode)
+	-- Skins: en Solo el único jugador; en Versus Seat1 (quién inicia)
+	local skinOwner = players[1]
+	local equipped = PlayerDataService.getEquipped(skinOwner)
+	SkinApplier.applyFurniture(self.tableModel, equipped)
+	local cardAppearance = SkinApplier.getCardAppearance(equipped.Cards)
+
+	self.cardParts = BoardBuilder.build(self.tableModel, self.mode, cardAppearance)
 	if #self.cardParts == 0 then
 		warn("[MemoryGame] No se pudieron crear cartas en", self.tableId)
 		self.players = {}
 		self.scores = {}
+		self.streaks = {}
 		self.status = "waiting"
 		return
 	end
@@ -327,12 +378,33 @@ function GameInstance:handleMatch()
 	end
 
 	self.scores[currentPlayer] = (self.scores[currentPlayer] or 0) + 1
+
+	-- Racha + puntos persistentes
+	local newStreak = (self.streaks[currentPlayer] or 0) + 1
+	self.streaks[currentPlayer] = newStreak
+	local pointsGained = ProgressConfig.calculateMatchPoints(newStreak)
+	local totalPoints = PlayerDataService.addPoints(currentPlayer, pointsGained)
+
 	self:fireToParticipants(
 		self.remotes.MatchFound,
 		self.revealed[1],
 		self.revealed[2],
 		currentPlayer.UserId
 	)
+
+	if self.remotes.StreakUpdated then
+		self.remotes.StreakUpdated:FireClient(
+			currentPlayer,
+			self.tableId,
+			newStreak,
+			ProgressConfig.getStreakMultiplier(newStreak),
+			pointsGained
+		)
+	end
+
+	if self.remotes.PointsAwarded then
+		self.remotes.PointsAwarded:FireClient(currentPlayer, pointsGained, totalPoints, newStreak)
+	end
 
 	self.revealed = {}
 	self.isEvaluating = false
@@ -343,6 +415,14 @@ function GameInstance:handleMatch()
 end
 
 function GameInstance:handleMismatch()
+	local currentPlayer = self.currentTurn
+	if currentPlayer then
+		self.streaks[currentPlayer] = 0
+		if self.remotes.StreakUpdated then
+			self.remotes.StreakUpdated:FireClient(currentPlayer, self.tableId, 0, 1, 0)
+		end
+	end
+
 	local revealedCopy = table.clone(self.revealed)
 	self.isEvaluating = true
 
@@ -425,7 +505,7 @@ function GameInstance:requestFlip(player: Player, cardIndex: number)
 	table.insert(self.revealed, cardIndex)
 	local cardPart = self.cardParts[cardIndex]
 	if cardPart then
-		BoardBuilder.revealCard(cardPart, card.id)
+		BoardBuilder.revealCard(cardPart, card.id, self.pairFaces[card.id])
 	end
 	self:fireToParticipants(self.remotes.CardRevealed, cardIndex, card.id)
 
